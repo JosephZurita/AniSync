@@ -1,6 +1,7 @@
 using Shoko.Abstractions.Config;
 using Shoko.Abstractions.Metadata;
 using Shoko.Abstractions.Metadata.Enums;
+using Shoko.Abstractions.Metadata.Image;
 using Shoko.Abstractions.Metadata.Services;
 using Shoko.Abstractions.Metadata.Shoko;
 using Shoko.Abstractions.Plugin;
@@ -50,21 +51,21 @@ namespace AniSync
         }
 
         /// <summary>
-        /// Gets episode thumbnail URL if available, falls back to MAL anime image
+        /// Gets the preferred episode backdrop, falling back to the series primary image.
         /// </summary>
-        private string? GetEpisodeThumbnailUrl(IShokoEpisode? episode, Anime? anime)
+        private static string? GetEpisodeThumbnailUrl(IShokoEpisode? episode)
         {
             var image = episode?.GetPreferredImageForType(ImageEntityType.Backdrop)
-                ?? episode?.GetImages(imageType: ImageEntityType.Backdrop)?.FirstOrDefault()
+                ?? episode?.GetImages(new() { ImageType = ImageEntityType.Backdrop }).FirstOrDefault()
                 ?? episode?.Series?.GetPreferredImageForType(ImageEntityType.Primary)
-                ?? episode?.Series?.GetImages(imageType: ImageEntityType.Primary)?.FirstOrDefault();
+                ?? episode?.Series?.GetImages(new() { ImageType = ImageEntityType.Primary }).FirstOrDefault();
             if (image == null)
                 return null;
 
-#pragma warning disable CS0618
-            return $"/api/v3/Image/{image.Source}/{image.Type}/{image.LocalID}";
-#pragma warning restore CS0618
+            return GetShokoImageUrl(image);
         }
+
+        internal static string GetShokoImageUrl(IImage image) => $"/api/v3/Image/{image.ID:D}";
 
         private static DateTime? GetSeriesAirDate(ISeries? series)
         {
@@ -549,7 +550,7 @@ namespace AniSync
                                         true,
                                         statusToUse,
                                         provider.ToString(),
-                                        GetEpisodeThumbnailUrl(maxEpisode, anime),
+                                        GetEpisodeThumbnailUrl(maxEpisode),
                                         userAuth?.Username ?? "Unknown User",
                                         eventId: eventId
                                     );
@@ -612,7 +613,7 @@ namespace AniSync
                                         true,
                                         newStatus,
                                         provider.ToString(),
-                                        GetEpisodeThumbnailUrl(maxEpisode, anime),
+                                        GetEpisodeThumbnailUrl(maxEpisode),
                                         userAuth?.Username ?? "Unknown User",
                                         eventId: eventId
                                     );

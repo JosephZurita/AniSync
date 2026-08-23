@@ -695,6 +695,8 @@ namespace AniSync.Controllers
                 var asset = GetEmbeddedAsset(path);
                 if (asset != null)
                     return File(asset, ContentTypeFor(path));
+                if (Path.HasExtension(path))
+                    return NotFound();
             }
 
             var index = GetEmbeddedAsset("index.html");
@@ -702,10 +704,12 @@ namespace AniSync.Controllers
             return File(index, "text/html");
         }
 
-        private static byte[]? GetEmbeddedAsset(string relativePath)
+        internal static byte[]? GetEmbeddedAsset(string relativePath)
         {
             var assembly = typeof(AniSyncController).Assembly;
-            using var stream = assembly.GetManifestResourceStream($"app/{relativePath}");
+            var normalizedPath = relativePath.Replace('\\', '/').TrimStart('/');
+            using var stream = assembly.GetManifestResourceStream($"app/{normalizedPath}")
+                ?? assembly.GetManifestResourceStream($"app/{normalizedPath.Replace('/', '\\')}");
             if (stream == null) return null;
             using var ms = new MemoryStream();
             stream.CopyTo(ms);
