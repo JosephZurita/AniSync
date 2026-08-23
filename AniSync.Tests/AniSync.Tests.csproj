@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AniSync\AniSync.csproj" />
+    <ProjectReference Include="..\AniSync.ReleaseTool\AniSync.ReleaseTool.csproj" />
   </ItemGroup>
 
 </Project>

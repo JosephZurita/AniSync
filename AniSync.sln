@@ -7,6 +7,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AniSync", "AniSync\AniSync.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AniSync.Tests", "AniSync.Tests\AniSync.Tests.csproj", "{92DFF55D-2BC4-4A25-A158-B781B64D569C}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "AniSync.ReleaseTool", "AniSync.ReleaseTool\AniSync.ReleaseTool.csproj", "{C0CBECC0-5C4F-4D98-A65D-5E6ACCC0A568}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{92DFF55D-2BC4-4A25-A158-B781B64D569C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{92DFF55D-2BC4-4A25-A158-B781B64D569C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{92DFF55D-2BC4-4A25-A158-B781B64D569C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C0CBECC0-5C4F-4D98-A65D-5E6ACCC0A568}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C0CBECC0-5C4F-4D98-A65D-5E6ACCC0A568}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C0CBECC0-5C4F-4D98-A65D-5E6ACCC0A568}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C0CBECC0-5C4F-4D98-A65D-5E6ACCC0A568}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

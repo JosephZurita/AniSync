@@ -3,7 +3,24 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <DevelopmentBuildNumber Condition="'$(DevelopmentBuildNumber)' == ''">0</DevelopmentBuildNumber>
+        <Version>1.0.0-dev.$(DevelopmentBuildNumber)</Version>
+        <AssemblyVersion>1.0.0.$(DevelopmentBuildNumber)</AssemblyVersion>
+        <FileVersion>1.0.0.$(DevelopmentBuildNumber)</FileVersion>
+        <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
+        <ReleaseChannel>Dev</ReleaseChannel>
+        <RepositoryUrl>https://github.com/JosephZurita/AniSync</RepositoryUrl>
     </PropertyGroup>
+
+    <Target Name="ValidateDevelopmentBuildNumber" BeforeTargets="PrepareForBuild">
+        <PropertyGroup>
+            <_IsNumericDevelopmentBuildNumber>$([System.Text.RegularExpressions.Regex]::IsMatch('$(DevelopmentBuildNumber)', '^[0-9]+$'))</_IsNumericDevelopmentBuildNumber>
+        </PropertyGroup>
+        <Error Condition="'$(_IsNumericDevelopmentBuildNumber)' != 'True'"
+               Text="DevelopmentBuildNumber must be a non-negative integer derived from GITHUB_RUN_NUMBER; received '$(DevelopmentBuildNumber)'." />
+        <Error Condition="'$(_IsNumericDevelopmentBuildNumber)' == 'True' And $([System.Int32]::Parse('$(DevelopmentBuildNumber)')) &gt; 65534"
+               Text="DevelopmentBuildNumber $(DevelopmentBuildNumber) exceeds the CLR AssemblyVersion revision limit of 65534; no package was produced." />
+    </Target>
 
     <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App" />

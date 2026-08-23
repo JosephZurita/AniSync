@@ -11,7 +11,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue master publications so two releases can never update the manifest
+  # branch concurrently. Superseded pull-request checks may still be cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -19,6 +21,7 @@ permissions:
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: "1"
   DOTNET_NOLOGO: "1"
+  DEVELOPMENT_BUILD_NUMBER: ${{ github.run_number }}
 
 jobs:
   build:
@@ -28,6 +31,28 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+
+      - name: Prepare development version
+        id: metadata
+        shell: bash
+        run: |
+          if ! [[ "$DEVELOPMENT_BUILD_NUMBER" =~ ^[0-9]+$ ]] || (( DEVELOPMENT_BUILD_NUMBER < 1 || DEVELOPMENT_BUILD_NUMBER > 65534 )); then
+            echo "GITHUB_RUN_NUMBER '$DEVELOPMENT_BUILD_NUMBER' is outside the CLR AssemblyVersion revision range 1-65534." >&2
+            exit 1
+          fi
+
+          abstraction_version=$(sed -n 's/.*PackageReference Include="Shoko.Abstractions" Version="\([^"]*\)".*/\1/p' AniSync/AniSync.csproj)
+          if [[ ! "$abstraction_version" =~ ^6\.0\.0-[0-9A-Za-z.-]+$ ]]; then
+            echo "Unable to determine an exact Shoko.Abstractions 6.0.0 prerelease from AniSync.csproj (found '$abstraction_version')." >&2
+            exit 1
+          fi
+
+          version="1.0.0-dev.${DEVELOPMENT_BUILD_NUMBER}"
+          short_sha="${GITHUB_SHA:0:7}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=dev-${DEVELOPMENT_BUILD_NUMBER}-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "abstraction_version=$abstraction_version" >> "$GITHUB_OUTPUT"
+          echo "archive_timestamp=$(git show -s --format=%cI "$GITHUB_SHA")" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -54,16 +79,39 @@ jobs:
           dotnet-version: "10.x"
 
       - name: Restore .NET dependencies
-        run: dotnet restore AniSync.sln
+        run: dotnet restore AniSync.sln -p:DevelopmentBuildNumber=${DEVELOPMENT_BUILD_NUMBER}
 
       - name: Build and test AniSync
-        run: dotnet test AniSync.sln --configuration Release --no-restore
+        run: >-
+          dotnet test AniSync.sln
+          --configuration Release
+          --no-restore
+          -p:DevelopmentBuildNumber=${DEVELOPMENT_BUILD_NUMBER}
+          -p:ContinuousIntegrationBuild=true
 
-      - name: Upload AniSync DLL
+      - name: Build and validate release package
+        shell: bash
+        run: |
+          dotnet AniSync.ReleaseTool/bin/Release/net10.0/AniSync.ReleaseTool.dll pack \
+            --dll AniSync/bin/Release/net10.0/AniSync.dll \
+            --output release \
+            --run-number "$DEVELOPMENT_BUILD_NUMBER" \
+            --commit "$GITHUB_SHA" \
+            --abstractions-version "${{ steps.metadata.outputs.abstraction_version }}" \
+            --timestamp "${{ steps.metadata.outputs.archive_timestamp }}"
+
+      - name: Upload validated release assets
         uses: actions/upload-artifact@v7
         with:
-          name: AniSync-${{ github.sha }}
-          path: AniSync/bin/Release/net10.0/AniSync.dll
+          name: AniSync-${{ github.sha }}-${{ github.run_number }}
+          path: |
+            release/AniSync.dll
+            release/AniSync.dll.sha256
+            release/AniSync-${{ steps.metadata.outputs.version }}.zip
+            release/AniSync-${{ steps.metadata.outputs.version }}.zip.sha256
+            AniSync.ReleaseTool/bin/Release/net10.0/AniSync.ReleaseTool.dll
+            AniSync.ReleaseTool/bin/Release/net10.0/AniSync.ReleaseTool.deps.json
+            AniSync.ReleaseTool/bin/Release/net10.0/AniSync.ReleaseTool.runtimeconfig.json
           if-no-files-found: error
           retention-days: 30
 
@@ -78,43 +126,107 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
 
-      - name: Download AniSync DLL
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.x"
+
+      - name: Download validated release assets
         uses: actions/download-artifact@v8
         with:
-          name: AniSync-${{ github.sha }}
-          path: release
+          name: AniSync-${{ github.sha }}-${{ github.run_number }}
+          path: artifact
 
-      - name: Prepare release metadata
-        id: metadata
+      - name: Generate and validate Shoko package manifest
         shell: bash
         run: |
-          abstraction_version=$(sed -n 's/.*PackageReference Include="Shoko.Abstractions" Version="\([^"]*\)".*/\1/p' AniSync/AniSync.csproj)
-          if [[ -z "$abstraction_version" ]]; then
-            echo "Unable to determine the Shoko.Abstractions version." >&2
+          if ! [[ "$DEVELOPMENT_BUILD_NUMBER" =~ ^[0-9]+$ ]] || (( DEVELOPMENT_BUILD_NUMBER < 1 || DEVELOPMENT_BUILD_NUMBER > 65534 )); then
+            echo "GITHUB_RUN_NUMBER '$DEVELOPMENT_BUILD_NUMBER' is outside the CLR AssemblyVersion revision range 1-65534." >&2
             exit 1
           fi
 
-          short_sha=$(git rev-parse --short=7 HEAD)
-          echo "abstraction_version=$abstraction_version" >> "$GITHUB_OUTPUT"
-          echo "tag=dev-${GITHUB_RUN_NUMBER}-${short_sha}" >> "$GITHUB_OUTPUT"
-          (cd release && sha256sum AniSync.dll > AniSync.dll.sha256)
+          abstraction_version=$(sed -n 's/.*PackageReference Include="Shoko.Abstractions" Version="\([^"]*\)".*/\1/p' AniSync/AniSync.csproj)
+          if [[ ! "$abstraction_version" =~ ^6\.0\.0-[0-9A-Za-z.-]+$ ]]; then
+            echo "Unable to determine an exact Shoko.Abstractions 6.0.0 prerelease from AniSync.csproj (found '$abstraction_version')." >&2
+            exit 1
+          fi
+
+          version="1.0.0-dev.${DEVELOPMENT_BUILD_NUMBER}"
+          tag="dev-${DEVELOPMENT_BUILD_NUMBER}-${GITHUB_SHA:0:7}"
+          zip_path="artifact/release/AniSync-${version}.zip"
+
+          if git ls-remote --exit-code --heads origin manifest >/dev/null 2>&1; then
+            git fetch --depth=1 origin manifest
+            git worktree add --detach manifest-worktree FETCH_HEAD
+            existing_args=(--existing manifest-worktree/manifest.json)
+          else
+            git worktree add --detach manifest-worktree
+            git -C manifest-worktree switch --orphan manifest
+            existing_args=()
+          fi
+
+          released_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          dotnet artifact/AniSync.ReleaseTool/bin/Release/net10.0/AniSync.ReleaseTool.dll manifest \
+            --dll artifact/release/AniSync.dll \
+            --zip "$zip_path" \
+            --output manifest-worktree/manifest.json \
+            --run-number "$DEVELOPMENT_BUILD_NUMBER" \
+            --commit "$GITHUB_SHA" \
+            --abstractions-version "$abstraction_version" \
+            --tag "$tag" \
+            --released-at "$released_at" \
+            "${existing_args[@]}"
+
+          python3 -m json.tool manifest-worktree/manifest.json >/dev/null
+
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=$tag" >> "$GITHUB_ENV"
+          echo "SHOKO_ABSTRACTIONS_VERSION=$abstraction_version" >> "$GITHUB_ENV"
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
 
       - name: Create development prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
-          SHOKO_ABSTRACTIONS_VERSION: ${{ steps.metadata.outputs.abstraction_version }}
         shell: bash
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" release/AniSync.dll release/AniSync.dll.sha256 --clobber
-          else
-            gh release create "$RELEASE_TAG" \
-              release/AniSync.dll \
-              release/AniSync.dll.sha256 \
+            gh release upload "$RELEASE_TAG" \
+              artifact/release/AniSync.dll \
+              artifact/release/AniSync.dll.sha256 \
+              "$ZIP_PATH" \
+              "${ZIP_PATH}.sha256" \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
               --target "$GITHUB_SHA" \
               --prerelease \
-              --title "AniSync development build ($RELEASE_TAG)" \
-              --notes "Automated AniSync development build for Shoko.Abstractions $SHOKO_ABSTRACTIONS_VERSION. Built and tested from commit $GITHUB_SHA."
+              --title "AniSync development build ${VERSION}" \
+              --notes "Automated AniSync development build ${VERSION} for Shoko.Abstractions ${SHOKO_ABSTRACTIONS_VERSION}. Built and tested from commit ${GITHUB_SHA}."
+          else
+            gh release create "$RELEASE_TAG" \
+              artifact/release/AniSync.dll \
+              artifact/release/AniSync.dll.sha256 \
+              "$ZIP_PATH" \
+              "${ZIP_PATH}.sha256" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "AniSync development build ${VERSION}" \
+              --notes "Automated AniSync development build ${VERSION} for Shoko.Abstractions ${SHOKO_ABSTRACTIONS_VERSION}. Built and tested from commit ${GITHUB_SHA}."
           fi
+
+      - name: Publish manifest branch
+        shell: bash
+        run: |
+          git -C manifest-worktree config user.name "github-actions[bot]"
+          git -C manifest-worktree config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C manifest-worktree add manifest.json
+
+          if git -C manifest-worktree diff --cached --quiet; then
+            echo "manifest.json is already current for ${VERSION}."
+            exit 0
+          fi
+
+          git -C manifest-worktree commit -m "chore: update AniSync package manifest for ${VERSION} [skip ci]"
+          git -C manifest-worktree push origin HEAD:manifest

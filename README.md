@@ -41,18 +41,54 @@ And on mobile:
 
 ## Requirements
 
-- **Shoko Server 6.0 dev** with the plugin API. The exact tested
+- **A compatible Shoko Server 6.0 dev build** with the plugin API and native plugin
+  package manager. AniSync is published only on the **Dev** channel. The exact tested
   `Shoko.Abstractions` version is pinned in [`AniSync.csproj`](AniSync/AniSync.csproj).
 - **.NET 10 SDK** and **Node.js** (to build).
 - A **MyAnimeList** API app and/or an **AniList** API client (for OAuth - see below).
 
 ## Install
 
-1. Download `AniSync.dll` from the latest
+### Native package manager
+
+1. In Shoko's plugin package manager, add an AniSync repository using this manifest URL:
+
+   ```text
+   https://raw.githubusercontent.com/JosephZurita/AniSync/manifest/manifest.json
+   ```
+
+2. Sync the repository, select **AniSync**, and install the latest compatible **Dev**
+   release.
+3. Restart Shoko when prompted. AniSync serves its UI at `/anisync`.
+
+AniSync does not publish a Stable channel. A release is offered only when its Shoko
+6.0 abstraction is compatible with the running Shoko 6 Dev build.
+
+Native upgrades install the new versioned plugin package without purging AniSync's
+configuration. OAuth tokens, connected AniList/MyAnimeList accounts, per-user settings,
+and sync history therefore remain in place across upgrades. Do not choose a
+configuration-purge option when intentionally uninstalling AniSync if you want to keep
+that data.
+
+The manifest retains the latest 30 development builds. To hold a version, use Shoko's
+plugin manager to **pin** the installed AniSync release. To roll back, select an earlier
+AniSync Dev version from its version history and install/enable it; Shoko pins an enabled
+older version so automatic upgrades do not immediately replace it. Unpin it or install
+the latest version to resume upgrades.
+
+### Manual DLL fallback
+
+Manual installation remains supported:
+
+1. Download `AniSync.dll` and, optionally, `AniSync.dll.sha256` from the latest
    [development release](https://github.com/JosephZurita/AniSync/releases), or build it
    locally using the steps in [Development](#development).
 2. Drop the DLL into Shoko's `plugins/` folder.
-3. Restart Shoko. The plugin serves its UI at `/anisync`.
+3. Restart Shoko.
+
+Use either the native package or the manually copied DLL, not both. When migrating an
+existing manual install, stop Shoko and remove only the old manually copied DLL before
+installing the native package; leave AniSync configuration and data files intact.
 
 ## Configuration
 
@@ -96,16 +132,17 @@ watch**, shared across providers via an event id.
 Watched/unwatched is read from Shoko's `LastPlayedAt`, not the sticky `IsWatched` flag, so
 an unwatch is correctly detected instead of being re-synced.
 
-The **Sync Library** page scans the current Shoko user's episode data and previews the
-highest watched normal episode in each series. The user can search, select, or exclude
-individual entries before anything is sent. AniSync validates the submitted selection
-against the user's current Shoko data, then sends only those series to each connected
-provider sequentially. The preview refreshes while the page is open and whenever the
-window regains focus; marking an episode unwatched removes it from eligibility because
-the current Shoko `LastPlayedAt` value, rather than historical playback count, is used.
-It respects **Sync only on completion** and the configured sync delay. Rewatch inference is
-disabled for bulk jobs, which makes running the same import again idempotent; series already
-up to date remain unchanged.
+The **Sync Library** page scans the current Shoko user's episode data, compares it with
+every connected provider list, and shows only series that still need an add or progress
+update. The user can search, select, or exclude individual entries before anything is
+sent. The manual **Refresh** button repeats that comparison using current Shoko and
+provider state. Marking an episode unwatched removes it from eligibility because the
+current Shoko `LastPlayedAt` value, rather than historical playback count, is used.
+AniSync validates the submitted selection against the user's current Shoko data, then
+sends only those series to each connected provider sequentially. It respects **Sync only
+on completion** and the configured sync delay. Rewatch inference is disabled for bulk
+jobs, which makes running the same import again idempotent; series already up to date
+remain unchanged.
 
 ## Development
 
@@ -133,9 +170,17 @@ Dependabot checks the Shoko plugin packages daily. When a new
 pull request with the exact package update. GitHub Actions then builds the frontend,
 runs the full test suite, and uploads the resulting `AniSync.dll` for review.
 
-Every successful push to `master` also publishes a development prerelease containing
-the DLL and its SHA-256 checksum. The workflow can be run manually from the Actions
-tab when an on-demand compatibility build is needed.
+Every successful `master` build receives version `1.0.0-dev.<GitHub run number>` and
+publishes a development prerelease containing:
+
+- `AniSync.dll` and `AniSync.dll.sha256` for manual installs.
+- `AniSync-1.0.0-dev.<run number>.zip` and its SHA-256 checksum for Shoko's package
+  manager.
+- A newest-first manifest entry on the dedicated `manifest` branch.
+
+The workflow validates the DLL identity/version, archive contents, checksums, and
+manifest before updating either the GitHub release or manifest branch. It can also be
+run manually from the Actions tab for an on-demand compatibility build.
 
 ## Tech stack
 
