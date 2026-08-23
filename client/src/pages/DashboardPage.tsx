@@ -18,6 +18,7 @@ import { formatLastSync, formatRelative } from "@/lib/format";
 import { ProviderCard } from "@/components/provider-card";
 import { ProviderBadge } from "@/components/provider-badge";
 import { StatCard } from "@/components/stat-card";
+import { BulkSyncCard } from "@/components/bulk-sync-card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -169,6 +170,10 @@ const DashboardPage = () => {
                             icon={Clock}
                         />
                         <StatCard label="Pending" value={data.pendingUpdates} icon={RefreshCw} />
+                    </section>
+
+                    <section>
+                        <BulkSyncCard />
                     </section>
 
                     <section>

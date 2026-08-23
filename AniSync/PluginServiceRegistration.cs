@@ -11,7 +11,8 @@ namespace AniSync
         {
             services.AddHttpContextAccessor();
             services.AddMemoryCache();
-            services.AddHostedService<ShokoAniSyncPlugin>();
+            services.AddSingleton<ShokoAniSyncPlugin>();
+            services.AddHostedService(provider => provider.GetRequiredService<ShokoAniSyncPlugin>());
         }
     }
 

@@ -173,6 +173,7 @@ namespace AniSync.Api
             };
 
             url.Parameters.Add(new KeyValuePair<string, string>("fields", "list_status,num_episodes"));
+            url.Parameters.Add(new KeyValuePair<string, string>("limit", "1000"));
 
             if (status != null)
             {

@@ -2,7 +2,13 @@ import { useEffect } from "react";
 import { NavLink, Route, Routes, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { LayoutDashboard, Settings2, History as HistoryIcon, User } from "lucide-react";
+import {
+    History as HistoryIcon,
+    LayoutDashboard,
+    ListChecks,
+    Settings2,
+    User
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWhoami } from "@/api/queries";
 import { Brand } from "@/components/brand";
@@ -10,9 +16,11 @@ import { ModeToggle } from "@/components/mode-toggle";
 import DashboardPage from "@/pages/DashboardPage";
 import SettingsPage from "@/pages/SettingsPage";
 import HistoryPage from "@/pages/HistoryPage";
+import SyncLibraryPage from "@/pages/SyncLibraryPage";
 
 const navItems = [
     { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+    { to: "/sync", label: "Sync Library", icon: ListChecks, end: false },
     { to: "/settings", label: "Settings", icon: Settings2, end: false },
     { to: "/history", label: "History", icon: HistoryIcon, end: false }
 ];
@@ -91,6 +99,7 @@ const App = () => {
             <main className="px-6 py-8 lg:px-10">
                 <Routes>
                     <Route path="/" element={<DashboardPage />} />
+                    <Route path="/sync" element={<SyncLibraryPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/history" element={<HistoryPage />} />
                 </Routes>

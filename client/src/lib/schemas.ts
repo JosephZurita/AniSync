@@ -22,6 +22,31 @@ export const DashboardSchema = z.object({
     pendingUpdates: z.number()
 });
 
+export const BulkSyncStatusSchema = z.object({
+    state: z.enum(["idle", "running", "completed", "failed", "cancelled"]),
+    totalSeries: z.number().int().nonnegative(),
+    processedSeries: z.number().int().nonnegative(),
+    updatedSeries: z.number().int().nonnegative(),
+    failedSeries: z.number().int().nonnegative(),
+    currentSeries: z.string().nullable(),
+    startedAt: z.string().nullable(),
+    completedAt: z.string().nullable(),
+    error: z.string().nullable()
+});
+
+export const BulkSyncPreviewItemSchema = z.object({
+    seriesID: z.number().int().positive(),
+    anidbAnimeID: z.number().int().positive(),
+    title: z.string(),
+    episodeNumber: z.number().int().positive(),
+    totalEpisodes: z.number().int().nonnegative(),
+    image: z.string().nullable()
+});
+
+export const BulkSyncPreviewSchema = z.object({
+    items: z.array(BulkSyncPreviewItemSchema)
+});
+
 export const SettingsSchema = z.object({
     updateNsfw: z.boolean(),
     enableAutoSync: z.boolean(),
@@ -86,6 +111,8 @@ export const HistorySchema = z.object({
 export type ProviderStatus = z.infer<typeof ProviderStatusSchema>;
 export type Providers = z.infer<typeof ProvidersSchema>;
 export type Dashboard = z.infer<typeof DashboardSchema>;
+export type BulkSyncStatus = z.infer<typeof BulkSyncStatusSchema>;
+export type BulkSyncPreviewItem = z.infer<typeof BulkSyncPreviewItemSchema>;
 export type Settings = z.infer<typeof SettingsSchema>;
 export type UserSettings = z.infer<typeof UserSettingsSchema>;
 export type GlobalSettings = z.infer<typeof GlobalSettingsSchema>;

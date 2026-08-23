@@ -34,7 +34,25 @@ namespace AniSync
         private readonly IUserDataService _userDataService;
         private readonly IApplicationPaths _applicationPaths;
         private readonly ConfigurationProvider<Config> _configProvider;
+        private readonly object _bulkSyncGate = new();
+        private readonly Dictionary<string, BulkSyncStatus> _bulkSyncStatuses = new(StringComparer.OrdinalIgnoreCase);
+        private readonly CancellationTokenSource _stoppingTokenSource = new();
         public static SyncHistoryManager SyncHistory { get; private set; } = null!;
+
+        internal sealed record BulkSyncCandidate(IShokoEpisode Episode);
+
+        private sealed record BulkSyncProviderContext(
+            ApiName Provider,
+            IApiCallHelpers Api,
+            IReadOnlyDictionary<int, Anime> AnimeByID);
+
+        private enum ProviderSyncResult
+        {
+            Updated,
+            Unchanged,
+            Skipped,
+            Failed
+        }
 
         public ShokoAniSyncPlugin(IApplicationPaths applicationPaths, IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IMemoryCache memoryCache, IMetadataService metadataService, IUserDataService userDataService, ConfigurationProvider<Config> configProvider)
         {
@@ -51,6 +69,391 @@ namespace AniSync
         }
 
         /// <summary>
+        /// Returns the latest bulk sync status for a Shoko user.
+        /// </summary>
+        public BulkSyncStatus GetBulkSyncStatus(string username)
+        {
+            lock (_bulkSyncGate)
+            {
+                return _bulkSyncStatuses.TryGetValue(username, out var status)
+                    ? status
+                    : new BulkSyncStatus();
+            }
+        }
+
+        /// <summary>
+        /// Starts a background sync of the user's watched normal episodes. Only one
+        /// bulk sync can run for a user at a time.
+        /// </summary>
+        public bool TryStartBulkSync(IUser user, IReadOnlyCollection<int> selectedSeriesIDs, out BulkSyncStatus status)
+        {
+            var username = user.Username;
+            var candidates = SelectBulkSyncCandidates(
+                BuildBulkSyncCandidates(_userDataService.GetEpisodeUserDataForUser(user)),
+                selectedSeriesIDs);
+            if (candidates.Count == 0)
+                throw new InvalidOperationException("Select at least one watched series to sync.");
+
+            lock (_bulkSyncGate)
+            {
+                if (_bulkSyncStatuses.TryGetValue(username, out var existing) && existing.State == "running")
+                {
+                    status = existing;
+                    return false;
+                }
+
+                status = new BulkSyncStatus
+                {
+                    State = "running",
+                    TotalSeries = candidates.Count,
+                    StartedAt = DateTimeOffset.UtcNow
+                };
+                _bulkSyncStatuses[username] = status;
+            }
+
+            _ = Task.Run(() => RunBulkSyncAsync(user, candidates, _stoppingTokenSource.Token));
+            return true;
+        }
+
+        /// <summary>
+        /// Builds the review list for the current Shoko user, including only series
+        /// whose watched progress would change at least one connected provider.
+        /// </summary>
+        public async Task<IReadOnlyList<BulkSyncPreviewItem>> GetBulkSyncPreviewAsync(IUser user)
+        {
+            var candidates = BuildBulkSyncCandidates(_userDataService.GetEpisodeUserDataForUser(user));
+            var config = _configProvider.Load();
+            var providers = config.GetConnectedProviders(user.Username);
+            var providerContexts = new List<BulkSyncProviderContext>();
+
+            foreach (var provider in providers)
+            {
+                var api = ProviderApiFactory.Create(
+                    provider,
+                    _httpClientFactory,
+                    _loggerFactory,
+                    _memoryCache,
+                    _configProvider,
+                    _applicationPaths);
+                if (api == null)
+                    continue;
+
+                try
+                {
+                    int? providerUserID = null;
+                    if (provider == ApiName.AniList)
+                        providerUserID = (await api.GetUser(user.Username))?.Id;
+
+                    var animeList = await api.GetAnimeList(null, providerUserID, user.Username);
+                    providerContexts.Add(new BulkSyncProviderContext(
+                        provider,
+                        api,
+                        animeList.Where(anime => anime.Id > 0).ToDictionary(anime => anime.Id)));
+                }
+                catch (Exception ex)
+                {
+                    // Keep the provider in the comparison. Per-title lookups below
+                    // can still produce an accurate preview if the list call failed.
+                    _logger.LogWarning(ex, "Could not load the {Provider} list for {User}; falling back to individual lookups", provider, user.Username);
+                    providerContexts.Add(new BulkSyncProviderContext(
+                        provider,
+                        api,
+                        new Dictionary<int, Anime>()));
+                }
+            }
+
+            var syncOnlyCompleted = config.GetSyncOnlyCompleted(user.Username);
+            using var lookupGate = new SemaphoreSlim(6);
+            var previewTasks = candidates.Select(async candidate =>
+            {
+                await lookupGate.WaitAsync();
+                try
+                {
+                    var offlineDbIDs = await GetOfflineDatabaseIDsAsync(candidate.Episode);
+                    var needsSync = false;
+
+                    foreach (var providerContext in providerContexts)
+                    {
+                        try
+                        {
+                            var providerAnime = await GetProviderAnimeForPreviewAsync(
+                                providerContext,
+                                candidate.Episode,
+                                config,
+                                offlineDbIDs,
+                                user.Username);
+                            if (providerAnime != null && NeedsBulkSync(
+                                providerAnime,
+                                candidate.Episode.EpisodeNumber,
+                                syncOnlyCompleted))
+                            {
+                                needsSync = true;
+                                break;
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Could not compare {Title} with {Provider}", candidate.Episode.Series?.Title ?? "Unknown", providerContext.Provider);
+                        }
+                    }
+
+                    if (!needsSync)
+                        return null;
+
+                    var series = candidate.Episode.Series!;
+                    return new BulkSyncPreviewItem
+                    {
+                        SeriesID = candidate.Episode.SeriesID,
+                        AnidbAnimeID = series.AnidbAnimeID,
+                        Title = series.Title ?? "Unknown",
+                        EpisodeNumber = candidate.Episode.EpisodeNumber,
+                        TotalEpisodes = series.EpisodeCounts.Episodes,
+                        Image = GetSeriesThumbnailUrl(series)
+                    };
+                }
+                finally
+                {
+                    lookupGate.Release();
+                }
+            });
+            var preview = await Task.WhenAll(previewTasks);
+
+            return preview
+                .Where(item => item != null)
+                .Cast<BulkSyncPreviewItem>()
+                .OrderBy(item => item.Title, StringComparer.CurrentCultureIgnoreCase)
+                .ThenBy(item => item.SeriesID)
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Returns the watched source-series IDs used to reject stale or fabricated
+        /// selections without repeating the provider preflight at sync start.
+        /// </summary>
+        public IReadOnlySet<int> GetBulkSyncCandidateSeriesIDs(IUser user)
+        {
+            return BuildBulkSyncCandidates(_userDataService.GetEpisodeUserDataForUser(user))
+                .Select(candidate => candidate.Episode.SeriesID)
+                .ToHashSet();
+        }
+
+        internal static bool NeedsBulkSync(Anime providerAnime, int shokoEpisodeNumber, bool syncOnlyCompleted)
+        {
+            if (syncOnlyCompleted && providerAnime.NumEpisodes > 0 && shokoEpisodeNumber < providerAnime.NumEpisodes)
+                return false;
+
+            var current = providerAnime.MyListStatus;
+            if (current == null)
+                return true;
+
+            return RewatchSyncDecision.Decide(
+                true,
+                shokoEpisodeNumber,
+                1,
+                current.NumEpisodesWatched,
+                providerAnime.NumEpisodes,
+                current.Status,
+                current.IsRewatching,
+                current.RewatchCount ?? 0,
+                false,
+                false).ShouldUpdate;
+        }
+
+        private async Task<Anime?> GetProviderAnimeForPreviewAsync(
+            BulkSyncProviderContext context,
+            IShokoEpisode episode,
+            Config config,
+            AnimeOfflineDatabaseHelpers.OfflineDatabaseResponse? offlineDbIDs,
+            string shokoUsername)
+        {
+            var providerID = context.Provider == ApiName.AniList ? offlineDbIDs?.Anilist : offlineDbIDs?.Mal;
+            if (providerID is > 0)
+            {
+                if (context.AnimeByID.TryGetValue(providerID.Value, out var listedAnime))
+                    return listedAnime;
+
+                return await context.Api.GetAnime(providerID.Value, shokoUsername: shokoUsername);
+            }
+
+            var matchedAnime = await FetchIdFromProvider(context.Api, context.Provider, episode, config, shokoUsername);
+            if (matchedAnime == null)
+                return null;
+            if (context.AnimeByID.TryGetValue(matchedAnime.Id, out var matchedListedAnime))
+                return matchedListedAnime;
+
+            return await context.Api.GetAnime(matchedAnime.Id, shokoUsername: shokoUsername) ?? matchedAnime;
+        }
+
+        private async Task<AnimeOfflineDatabaseHelpers.OfflineDatabaseResponse?> GetOfflineDatabaseIDsAsync(IShokoEpisode episode)
+        {
+            var anidbID = episode.Series?.AnidbAnimeID ?? 0;
+            var offlineKey = $"offlinedb_{anidbID}";
+            if (_memoryCache.TryGetValue(offlineKey, out AnimeOfflineDatabaseHelpers.OfflineDatabaseResponse? offlineDbIDs))
+                return offlineDbIDs;
+
+            try
+            {
+                offlineDbIDs = await AnimeOfflineDatabaseHelpers.GetProviderIdsFromMetadataProvider(
+                    _httpClientFactory.CreateClient(), anidbID, AnimeOfflineDatabaseHelpers.Source.Anidb);
+                _memoryCache.Set(offlineKey, offlineDbIDs, TimeSpan.FromHours(1));
+                return offlineDbIDs;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not load provider IDs for AniDB ID {AnidbID}", anidbID);
+                return null;
+            }
+        }
+
+        internal static IReadOnlyList<BulkSyncCandidate> BuildBulkSyncCandidates(IEnumerable<IEpisodeUserData> userData)
+        {
+            return userData
+                // Shoko keeps PlaybackCount as historical data when an episode is
+                // marked unwatched. LastPlayedAt is the current watched-state source
+                // of truth and is cleared by SetEpisodeWatchedStatus(false).
+                .Where(data => data.LastPlayedAt.HasValue)
+                .Select(data => data.Episode)
+                .Where(episode => episode is
+                {
+                    Type: EpisodeType.Episode,
+                    EpisodeNumber: > 0,
+                    Series: not null
+                })
+                .Cast<IShokoEpisode>()
+                .GroupBy(episode => episode.SeriesID)
+                .Select(group => new BulkSyncCandidate(group.MaxBy(episode => episode.EpisodeNumber)!))
+                .OrderBy(candidate => candidate.Episode.SeriesID)
+                .ToArray();
+        }
+
+        internal static IReadOnlyList<BulkSyncCandidate> SelectBulkSyncCandidates(
+            IEnumerable<BulkSyncCandidate> candidates,
+            IEnumerable<int> selectedSeriesIDs)
+        {
+            var selectedIDs = selectedSeriesIDs.ToHashSet();
+            return candidates
+                .Where(candidate => selectedIDs.Contains(candidate.Episode.SeriesID))
+                .ToArray();
+        }
+
+        private void UpdateBulkSyncStatus(string username, Func<BulkSyncStatus, BulkSyncStatus> update)
+        {
+            lock (_bulkSyncGate)
+            {
+                var current = _bulkSyncStatuses.TryGetValue(username, out var status)
+                    ? status
+                    : new BulkSyncStatus();
+                _bulkSyncStatuses[username] = update(current);
+            }
+        }
+
+        private async Task RunBulkSyncAsync(IUser user, IReadOnlyList<BulkSyncCandidate> candidates, CancellationToken cancellationToken)
+        {
+            var username = user.Username;
+            try
+            {
+                var config = _configProvider.Load();
+                var providers = config.GetConnectedProviders(username);
+                if (providers.Count == 0)
+                    throw new InvalidOperationException("No provider accounts are connected.");
+
+                for (var index = 0; index < candidates.Count; index++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var episode = candidates[index].Episode;
+                    var seriesTitle = episode.Series?.Title ?? "Unknown";
+                    UpdateBulkSyncStatus(username, status => status with { CurrentSeries = seriesTitle });
+
+                    var seriesFailed = false;
+                    var seriesUpdated = false;
+                    try
+                    {
+                        var anidbId = episode.Series?.AnidbAnimeID ?? 0;
+                        var offlineKey = $"offlinedb_{anidbId}";
+                        if (!_memoryCache.TryGetValue(offlineKey, out AnimeOfflineDatabaseHelpers.OfflineDatabaseResponse? offlineDbIds))
+                        {
+                            offlineDbIds = await AnimeOfflineDatabaseHelpers.GetProviderIdsFromMetadataProvider(
+                                _httpClientFactory.CreateClient(), anidbId, AnimeOfflineDatabaseHelpers.Source.Anidb);
+                            _memoryCache.Set(offlineKey, offlineDbIds, TimeSpan.FromHours(1));
+                        }
+
+                        var eventId = Guid.NewGuid().ToString();
+                        foreach (var provider in providers)
+                        {
+                            try
+                            {
+                                // A fixed playback count keeps bulk sync idempotent and prevents
+                                // repeated runs from being mistaken for new rewatches.
+                                var result = await SyncEpisodeToProviderAsync(
+                                    provider,
+                                    user,
+                                    episode,
+                                    true,
+                                    episode.EpisodeNumber,
+                                    1,
+                                    eventId,
+                                    offlineDbIds);
+                                seriesUpdated |= result == ProviderSyncResult.Updated;
+                                seriesFailed |= result == ProviderSyncResult.Failed;
+                            }
+                            catch (Exception ex)
+                            {
+                                seriesFailed = true;
+                                _logger.LogError(ex, "Bulk sync to {Provider} failed for {Title} and user {User}", provider, seriesTitle, username);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        seriesFailed = true;
+                        _logger.LogError(ex, "Bulk sync failed for {Title} and user {User}", seriesTitle, username);
+                    }
+
+                    UpdateBulkSyncStatus(username, status => status with
+                    {
+                        ProcessedSeries = index + 1,
+                        UpdatedSeries = status.UpdatedSeries + (seriesUpdated ? 1 : 0),
+                        FailedSeries = status.FailedSeries + (seriesFailed ? 1 : 0)
+                    });
+
+                    var delaySeconds = config.GetSyncDelaySeconds(username);
+                    if (delaySeconds > 0 && index < candidates.Count - 1)
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds), cancellationToken);
+                }
+
+                UpdateBulkSyncStatus(username, status => status with
+                {
+                    State = "completed",
+                    CurrentSeries = null,
+                    CompletedAt = DateTimeOffset.UtcNow
+                });
+                _logger.LogInformation("Bulk sync completed for {User}: {Updated}/{Total} series updated, {Failed} failed",
+                    username, GetBulkSyncStatus(username).UpdatedSeries, candidates.Count, GetBulkSyncStatus(username).FailedSeries);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                UpdateBulkSyncStatus(username, status => status with
+                {
+                    State = "cancelled",
+                    CurrentSeries = null,
+                    CompletedAt = DateTimeOffset.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Bulk sync failed for user {User}", username);
+                UpdateBulkSyncStatus(username, status => status with
+                {
+                    State = "failed",
+                    CurrentSeries = null,
+                    CompletedAt = DateTimeOffset.UtcNow,
+                    Error = ex.Message
+                });
+            }
+        }
+
+        /// <summary>
         /// Gets the preferred episode backdrop, falling back to the series primary image.
         /// </summary>
         private static string? GetEpisodeThumbnailUrl(IShokoEpisode? episode)
@@ -63,6 +466,13 @@ namespace AniSync
                 return null;
 
             return GetShokoImageUrl(image);
+        }
+
+        private static string? GetSeriesThumbnailUrl(IShokoSeries series)
+        {
+            var image = series.GetPreferredImageForType(ImageEntityType.Primary)
+                ?? series.GetImages(new() { ImageType = ImageEntityType.Primary }).FirstOrDefault();
+            return image == null ? null : GetShokoImageUrl(image);
         }
 
         internal static string GetShokoImageUrl(IImage image) => $"/api/v3/Image/{image.ID:D}";
@@ -322,7 +732,7 @@ namespace AniSync
             }
         }
 
-        private async Task SyncEpisodeToProviderAsync(ApiName provider, IUser shokoUser, IShokoEpisode maxEpisode, bool isWatched, int shokoEpisodeNumber, int playbackCount, string eventId, AnimeOfflineDatabaseHelpers.OfflineDatabaseResponse? offlineDbIds)
+        private async Task<ProviderSyncResult> SyncEpisodeToProviderAsync(ApiName provider, IUser shokoUser, IShokoEpisode maxEpisode, bool isWatched, int shokoEpisodeNumber, int playbackCount, string eventId, AnimeOfflineDatabaseHelpers.OfflineDatabaseResponse? offlineDbIds)
         {
             var config = _configProvider.Load();
 
@@ -330,7 +740,7 @@ namespace AniSync
             if (userAuth == null)
             {
                 _logger.LogDebug("No {Provider} account for Shoko user {Username}, skipping that provider", provider, shokoUser.Username);
-                return;
+                return ProviderSyncResult.Skipped;
             }
             _logger.LogInformation("Using {Provider} account {Account} for Shoko user {ShokoUser}",
                 provider, userAuth.Username, shokoUser.Username);
@@ -348,7 +758,7 @@ namespace AniSync
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Token refresh failed for user {User}. Please re-authenticate via /anisync", shokoUser.Username);
-                    return;
+                    return ProviderSyncResult.Failed;
                 }
             }
 
@@ -356,7 +766,7 @@ namespace AniSync
             if (apiCallHelpers == null)
             {
                 _logger.LogWarning("Provider {Provider} is not supported for sync, skipping", provider);
-                return;
+                return ProviderSyncResult.Failed;
             }
 
             var anime = await GetIdFromOfflineDb(apiCallHelpers, provider, maxEpisode, config, offlineDbIds, shokoUser?.Username);
@@ -369,7 +779,7 @@ namespace AniSync
                     {
                         _logger.LogDebug("SyncOnlyCompleted is enabled and episode {Episode}/{Total} is not the last - skipping sync for {Title}",
                             shokoEpisodeNumber, anime.NumEpisodes, anime.Title);
-                        return;
+                        return ProviderSyncResult.Skipped;
                     }
 
                     var animeWithStatus = await apiCallHelpers.GetAnime(anime.Id, alternativeId: anime.AlternativeId, getRelated: false, shokoUsername: shokoUser?.Username);
@@ -407,6 +817,7 @@ namespace AniSync
                         {
                             _logger.LogInformation("No {Provider} update needed for {Title} (episode {Episode}, list has {MalEpisode}, watched={Watched})",
                                 provider, anime.Title, shokoEpisodeNumber, malEpisodeCount, isWatched);
+                            return ProviderSyncResult.Unchanged;
                         }
                         else if (setRewatching == true)
                         {
@@ -554,10 +965,12 @@ namespace AniSync
                                         userAuth?.Username ?? "Unknown User",
                                         eventId: eventId
                                     );
+                                return ProviderSyncResult.Updated;
                             }
                             else
                             {
                                 _logger.LogError("Failed to update {Provider} status for {Title}", provider, anime.Title);
+                                return ProviderSyncResult.Failed;
                             }
                         }
                     }
@@ -617,22 +1030,28 @@ namespace AniSync
                                         userAuth?.Username ?? "Unknown User",
                                         eventId: eventId
                                     );
+                                return ProviderSyncResult.Updated;
                             }
                             else
                             {
                                 _logger.LogError("Failed to add {Title} to {Provider} list", anime.Title, provider);
+                                return ProviderSyncResult.Failed;
                             }
                         }
                         else
                         {
                             _logger.LogInformation("Anime not in {Provider} list and episode marked unwatched - skipping", provider);
+                            return ProviderSyncResult.Unchanged;
                         }
                     }
                 }
                 else
                 {
                     _logger.LogWarning("Could not find anime for {Title}", maxEpisode.Series?.Title ?? "Unknown");
+                    return ProviderSyncResult.Failed;
                 }
+
+            return ProviderSyncResult.Unchanged;
         }
 
         private async void OnSeriesUserDataSavedAsync(object? sender, SeriesUserDataSavedEventArgs e)
@@ -746,6 +1165,7 @@ namespace AniSync
 
         Task IHostedService.StopAsync(CancellationToken cancellationToken)
         {
+            _stoppingTokenSource.Cancel();
             _userDataService.EpisodeUserDataSaved -= OnEpisodeWatchedAsync;
             _userDataService.SeriesUserDataSaved -= OnSeriesUserDataSavedAsync;
             return Task.CompletedTask;

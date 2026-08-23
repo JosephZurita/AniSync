@@ -88,6 +88,24 @@ public class ApiCallHelpersTests
     }
 
     [Fact]
+    public void MapUserAnimeList_PreservesCurrentListStatus()
+    {
+        var anime = new Anime { Id = 42, Title = "Frieren", NumEpisodes = 28 };
+        var listStatus = new MyListStatus
+        {
+            Status = Status.Watching,
+            NumEpisodesWatched = 17
+        };
+
+        var result = ApiCallHelpers.MapUserAnimeList([
+            new UserAnimeListData { Anime = anime, ListStatus = listStatus }
+        ]);
+
+        result.Should().ContainSingle().Which.Should().BeSameAs(anime);
+        result[0].MyListStatus.Should().BeSameAs(listStatus);
+    }
+
+    [Fact]
     public void Constructor_Should_Accept_Null_Parameters()
     {
         // Act

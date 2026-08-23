@@ -209,7 +209,7 @@ const SettingsForm = ({ initial }: { initial: Settings }) => {
                                                 Sync delay (seconds)
                                             </FieldLabel>
                                             <FieldDescription>
-                                                Wait this long after a watch event before syncing.
+                                                Wait this long between series during a bulk sync.
                                             </FieldDescription>
                                             <NumberInput
                                                 field={field}

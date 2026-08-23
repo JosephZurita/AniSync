@@ -39,6 +39,7 @@ namespace AniSync.Controllers
         private readonly ConfigurationProvider<Config> _configProvider;
         private readonly IUserDataService _userDataService;
         private readonly IUserService _userService;
+        private readonly ShokoAniSyncPlugin _syncPlugin;
 
         private string ShokoApiBaseUrl
         {
@@ -62,7 +63,7 @@ namespace AniSync.Controllers
             }
         }
 
-        public AniSyncController(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IHttpContextAccessor httpContextAccessor, IApplicationPaths applicationPaths, IMemoryCache memoryCache, IUserDataService userDataService, IUserService userService, ConfigurationProvider<Config> configProvider)
+        public AniSyncController(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IHttpContextAccessor httpContextAccessor, IApplicationPaths applicationPaths, IMemoryCache memoryCache, IUserDataService userDataService, IUserService userService, ConfigurationProvider<Config> configProvider, ShokoAniSyncPlugin syncPlugin)
         {
             _httpClientFactory = httpClientFactory;
             _httpContextAccessor = httpContextAccessor;
@@ -74,6 +75,7 @@ namespace AniSync.Controllers
             _userDataService = userDataService;
             _userService = userService;
             _configProvider = configProvider;
+            _syncPlugin = syncPlugin;
         }
 
         [HttpGet]
@@ -555,6 +557,79 @@ namespace AniSync.Controllers
                 WriteIndented = true
             });
             return Content(json, "application/json");
+        }
+
+        /// <summary>
+        /// Returns the calling user's current or most recent bulk sync job.
+        /// </summary>
+        [HttpGet]
+        [Route("api/bulk-sync")]
+        public IActionResult GetBulkSyncStatusApi()
+        {
+            var shokoUsername = GetCurrentShokoUser();
+            if (string.IsNullOrEmpty(shokoUsername))
+                return Unauthorized(new { error = "Authentication required" });
+
+            return JsonCamel(_syncPlugin.GetBulkSyncStatus(shokoUsername));
+        }
+
+        /// <summary>
+        /// Lists the calling user's watched Shoko series so they can review and
+        /// select the exact entries to include before starting a bulk sync.
+        /// </summary>
+        [HttpGet]
+        [Route("api/bulk-sync/preview")]
+        public async Task<IActionResult> GetBulkSyncPreviewApi()
+        {
+            var shokoUsername = GetCurrentShokoUser();
+            if (string.IsNullOrEmpty(shokoUsername))
+                return Unauthorized(new { error = "Authentication required" });
+
+            var user = _userService.GetUserByUsername(shokoUsername);
+            if (user == null)
+                return Unauthorized(new { error = "Shoko user no longer exists" });
+
+            return JsonCamel(new { items = await _syncPlugin.GetBulkSyncPreviewAsync(user) });
+        }
+
+        /// <summary>
+        /// Starts a background push of all watched normal episodes from Shoko to
+        /// every provider connected by the calling user.
+        /// </summary>
+        [HttpPost]
+        [Route("api/bulk-sync")]
+        public IActionResult StartBulkSyncApi([FromBody] BulkSyncRequest? request)
+        {
+            var shokoUsername = GetCurrentShokoUser();
+            if (string.IsNullOrEmpty(shokoUsername))
+                return Unauthorized(new { error = "Authentication required" });
+
+            var user = _userService.GetUserByUsername(shokoUsername);
+            if (user == null)
+                return Unauthorized(new { error = "Shoko user no longer exists" });
+
+            var config = _configProvider.Load();
+            if (config.GetConnectedProviders(shokoUsername).Count == 0)
+                return BadRequest(new { error = "Connect at least one provider before starting a bulk sync" });
+
+            var requestedIDs = request?.SeriesIDs?.Distinct().ToArray() ?? [];
+            if (requestedIDs.Length == 0)
+                return BadRequest(new { error = "Select at least one watched series to sync" });
+
+            var availableIDs = _syncPlugin.GetBulkSyncCandidateSeriesIDs(user);
+            if (requestedIDs.Any(seriesID => !availableIDs.Contains(seriesID)))
+                return BadRequest(new { error = "One or more selected series are no longer available for sync. Refresh the preview and try again." });
+
+            if (!_syncPlugin.TryStartBulkSync(user, requestedIDs, out var status))
+            {
+                var conflict = JsonCamel(status);
+                conflict.StatusCode = StatusCodes.Status409Conflict;
+                return conflict;
+            }
+
+            var accepted = JsonCamel(status);
+            accepted.StatusCode = StatusCodes.Status202Accepted;
+            return accepted;
         }
 
         /// <summary>

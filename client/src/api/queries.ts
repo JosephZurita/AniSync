@@ -2,6 +2,8 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import {
+    BulkSyncPreviewSchema,
+    BulkSyncStatusSchema,
     DashboardSchema,
     GlobalSettingsSchema,
     HistorySchema,
@@ -23,6 +25,40 @@ export const useDashboard = () =>
         queryKey: ["dashboard"],
         queryFn: async () => DashboardSchema.parse((await api.get("/api/dashboard")).data)
     });
+
+export const useBulkSyncStatus = (enabled: boolean) =>
+    useQuery({
+        queryKey: ["bulkSync"],
+        enabled,
+        queryFn: async () =>
+            BulkSyncStatusSchema.parse((await api.get("/api/bulk-sync")).data),
+        refetchInterval: (query) =>
+            query.state.data?.state === "running" ? 1500 : false,
+        refetchIntervalInBackground: true
+    });
+
+export const useBulkSyncPreview = (enabled: boolean) =>
+    useQuery({
+        queryKey: ["bulkSyncPreview"],
+        enabled,
+        queryFn: async () =>
+            BulkSyncPreviewSchema.parse((await api.get("/api/bulk-sync/preview")).data)
+    });
+
+export const useStartBulkSync = () => {
+    const qc = useQueryClient();
+    return useMutation({
+        mutationFn: async (seriesIDs: number[]) =>
+            BulkSyncStatusSchema.parse(
+                (await api.post("/api/bulk-sync", { SeriesIDs: seriesIDs })).data
+            ),
+        onSuccess: (status) => {
+            qc.setQueryData(["bulkSync"], status);
+            toast.success("Bulk sync started");
+        },
+        onError: () => toast.error("Failed to start bulk sync")
+    });
+};
 
 export const useUserSettings = () =>
     useQuery({

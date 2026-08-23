@@ -142,8 +142,76 @@ namespace AniSync.Api
             };
         }
 
-        public Task<List<UserAnimeListData>> GetUserAnimeList(Status status, string? shokoUsername = null)
-            => Task.FromResult(new List<UserAnimeListData>());
+        public async Task<List<UserAnimeListData>> GetUserAnimeList(Status? status = null, int? userId = null, string? shokoUsername = null)
+        {
+            var result = new List<UserAnimeListData>();
+            if (userId == null)
+                userId = (await GetUserInformation(shokoUsername))?.Id;
+            if (userId is not > 0)
+                return result;
+
+            const string gql = "query ($userId: Int, $page: Int, $status: MediaListStatus) { Page(page: $page, perPage: 50) { pageInfo { hasNextPage } mediaList(userId: $userId, type: ANIME, status: $status) { status progress repeat startedAt { year month day } completedAt { year month day } media { id episodes title { romaji english } startDate { year month day } } } } }";
+            var pageNumber = 1;
+            var hasNextPage = true;
+
+            while (hasNextPage)
+            {
+                var variables = new Dictionary<string, object?>
+                {
+                    ["userId"] = userId.Value,
+                    ["page"] = pageNumber,
+                    ["status"] = status.HasValue ? MapToAniListStatus(status.Value) : null
+                };
+
+                using var doc = await PostGraphQl(gql, variables, shokoUsername);
+                if (doc == null ||
+                    !doc.RootElement.TryGetProperty("data", out var data) ||
+                    !data.TryGetProperty("Page", out var page) ||
+                    page.ValueKind != JsonValueKind.Object)
+                    break;
+
+                if (page.TryGetProperty("mediaList", out var mediaList) && mediaList.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var entry in mediaList.EnumerateArray())
+                    {
+                        if (!entry.TryGetProperty("media", out var media) || media.ValueKind != JsonValueKind.Object)
+                            continue;
+
+                        var aniStatus = entry.TryGetProperty("status", out var statusElement) && statusElement.ValueKind == JsonValueKind.String
+                            ? statusElement.GetString()
+                            : null;
+                        var (canonicalStatus, isRewatching) = MapFromAniListStatus(aniStatus);
+                        result.Add(new UserAnimeListData
+                        {
+                            Anime = new Anime
+                            {
+                                Id = ReadInt(media, "id") ?? 0,
+                                Title = ReadTitle(media),
+                                NumEpisodes = ReadInt(media, "episodes") ?? 0,
+                                StartDate = ReadFuzzyDate(media, "startDate")
+                            },
+                            ListStatus = new MyListStatus
+                            {
+                                Status = canonicalStatus,
+                                IsRewatching = isRewatching,
+                                NumEpisodesWatched = ReadInt(entry, "progress") ?? 0,
+                                RewatchCount = ReadInt(entry, "repeat") ?? 0,
+                                StartDate = ReadFuzzyDate(entry, "startedAt"),
+                                FinishDate = ReadFuzzyDate(entry, "completedAt")
+                            }
+                        });
+                    }
+                }
+
+                hasNextPage = page.TryGetProperty("pageInfo", out var pageInfo) &&
+                    pageInfo.ValueKind == JsonValueKind.Object &&
+                    pageInfo.TryGetProperty("hasNextPage", out var nextPage) &&
+                    nextPage.ValueKind == JsonValueKind.True;
+                pageNumber++;
+            }
+
+            return result;
+        }
 
         // --- mapping helpers ---
 

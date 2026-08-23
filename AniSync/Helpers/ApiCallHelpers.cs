@@ -62,15 +62,36 @@ namespace AniSync.Helpers
             return null;
         }
 
-        public async Task<List<Anime>> GetAnimeList(Status status, int? userId = null, string? shokoUsername = null)
+        public async Task<List<Anime>> GetAnimeList(Status? status = null, int? userId = null, string? shokoUsername = null)
         {
             if (_malApiCalls != null)
             {
                 var malAnimeList = await _malApiCalls.GetUserAnimeList(status, shokoUsername: shokoUsername);
-                return malAnimeList?.Select(animeList => animeList.Anime).Where(anime => anime != null).Cast<Anime>().ToList() ?? new List<Anime>();
+                return MapUserAnimeList(malAnimeList);
+            }
+
+            if (_aniListApiCalls != null)
+            {
+                var aniListAnimeList = await _aniListApiCalls.GetUserAnimeList(status, userId, shokoUsername);
+                return MapUserAnimeList(aniListAnimeList);
             }
 
             return new List<Anime>();
+        }
+
+        internal static List<Anime> MapUserAnimeList(IEnumerable<UserAnimeListData>? animeList)
+        {
+            if (animeList == null)
+                return new List<Anime>();
+
+            return animeList
+                .Where(item => item.Anime != null)
+                .Select(item =>
+                {
+                    item.Anime!.MyListStatus = item.ListStatus;
+                    return item.Anime;
+                })
+                .ToList();
         }
     }
 }

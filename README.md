@@ -18,6 +18,8 @@ manage everything.
 ## Features
 
 - **Dual-sync** to AniList + MyAnimeList from a single watch event.
+- **Reviewed bulk sync from Shoko** - preview every watched series on a dedicated page,
+  search and choose exactly what to include, then follow live progress.
 - **Per-user** - each Shoko user connects their own accounts.
 - **Smart matching** - resolves provider IDs from the anime-offline-database (cached per
   watch), with fuzzy title-matching as a fallback.
@@ -67,7 +69,8 @@ And on mobile:
 3. **Connect your accounts** - on the **Dashboard**, click **Connect** for AniList and/or
    MyAnimeList and authorize. Each Shoko user connects their own accounts.
 
-4. Watch something - progress syncs to every connected provider.
+4. Watch something - progress syncs to every connected provider. To import existing
+   progress, use **Sync library** on the dashboard.
 
 ## Settings
 
@@ -79,7 +82,7 @@ And on mobile:
 | Allow rollback | Let progress decrease when rewatching earlier episodes. |
 | Start date from any episode | Set the start date on the first watched episode, not only episode 1. |
 | Fuzzy title matching + threshold | Match titles loosely when no exact ID is found. |
-| Sync delay (seconds) | Wait this long after a watch event before syncing. |
+| Sync delay (seconds) | Wait this long between series during a bulk sync. |
 | Update NSFW | Include adult titles when syncing. |
 | Debug logging | Verbose logs for troubleshooting. |
 
@@ -92,6 +95,17 @@ watch**, shared across providers via an event id.
 
 Watched/unwatched is read from Shoko's `LastPlayedAt`, not the sticky `IsWatched` flag, so
 an unwatch is correctly detected instead of being re-synced.
+
+The **Sync Library** page scans the current Shoko user's episode data and previews the
+highest watched normal episode in each series. The user can search, select, or exclude
+individual entries before anything is sent. AniSync validates the submitted selection
+against the user's current Shoko data, then sends only those series to each connected
+provider sequentially. The preview refreshes while the page is open and whenever the
+window regains focus; marking an episode unwatched removes it from eligibility because
+the current Shoko `LastPlayedAt` value, rather than historical playback count, is used.
+It respects **Sync only on completion** and the configured sync delay. Rewatch inference is
+disabled for bulk jobs, which makes running the same import again idempotent; series already
+up to date remain unchanged.
 
 ## Development
 
