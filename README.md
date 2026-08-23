@@ -39,13 +39,16 @@ And on mobile:
 
 ## Requirements
 
-- **Shoko Server** with the plugin API (built against `Shoko.Abstractions` 6.0.0-alpha.24).
+- **Shoko Server 6.0 dev** with the plugin API. The exact tested
+  `Shoko.Abstractions` version is pinned in [`AniSync.csproj`](AniSync/AniSync.csproj).
 - **.NET 10 SDK** and **Node.js** (to build).
 - A **MyAnimeList** API app and/or an **AniList** API client (for OAuth - see below).
 
 ## Install
 
-1. Build the plugin (see [Development](#development)) to produce `AniSync.dll`.
+1. Download `AniSync.dll` from the latest
+   [development release](https://github.com/JosephZurita/AniSync/releases), or build it
+   locally using the steps in [Development](#development).
 2. Drop the DLL into Shoko's `plugins/` folder.
 3. Restart Shoko. The plugin serves its UI at `/anisync`.
 
@@ -108,6 +111,17 @@ dotnet build AniSync/AniSync.csproj -c Release
 # Run the tests
 dotnet test AniSync.Tests/AniSync.Tests.csproj
 ```
+
+### Automated compatibility builds
+
+Dependabot checks the Shoko plugin packages daily. When a new
+`Shoko.Abstractions` or `Shoko.BuildTools.Targets` version is published, it opens a
+pull request with the exact package update. GitHub Actions then builds the frontend,
+runs the full test suite, and uploads the resulting `AniSync.dll` for review.
+
+Every successful push to `master` also publishes a development prerelease containing
+the DLL and its SHA-256 checksum. The workflow can be run manually from the Actions
+tab when an on-demand compatibility build is needed.
 
 ## Tech stack
 

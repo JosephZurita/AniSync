@@ -1,0 +1,120 @@
+name: Build AniSync
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24.x"
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Lint frontend
+        working-directory: client
+        run: npm run lint
+
+      - name: Build frontend
+        working-directory: client
+        run: npm run build
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.x"
+
+      - name: Restore .NET dependencies
+        run: dotnet restore AniSync.sln
+
+      - name: Build and test AniSync
+        run: dotnet test AniSync.sln --configuration Release --no-restore
+
+      - name: Upload AniSync DLL
+        uses: actions/upload-artifact@v7
+        with:
+          name: AniSync-${{ github.sha }}
+          path: AniSync/bin/Release/net10.0/AniSync.dll
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-development-release:
+    name: Publish development prerelease
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Download AniSync DLL
+        uses: actions/download-artifact@v8
+        with:
+          name: AniSync-${{ github.sha }}
+          path: release
+
+      - name: Prepare release metadata
+        id: metadata
+        shell: bash
+        run: |
+          abstraction_version=$(sed -n 's/.*PackageReference Include="Shoko.Abstractions" Version="\([^"]*\)".*/\1/p' AniSync/AniSync.csproj)
+          if [[ -z "$abstraction_version" ]]; then
+            echo "Unable to determine the Shoko.Abstractions version." >&2
+            exit 1
+          fi
+
+          short_sha=$(git rev-parse --short=7 HEAD)
+          echo "abstraction_version=$abstraction_version" >> "$GITHUB_OUTPUT"
+          echo "tag=dev-${GITHUB_RUN_NUMBER}-${short_sha}" >> "$GITHUB_OUTPUT"
+          (cd release && sha256sum AniSync.dll > AniSync.dll.sha256)
+
+      - name: Create development prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.metadata.outputs.tag }}
+          SHOKO_ABSTRACTIONS_VERSION: ${{ steps.metadata.outputs.abstraction_version }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release/AniSync.dll release/AniSync.dll.sha256 --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              release/AniSync.dll \
+              release/AniSync.dll.sha256 \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --title "AniSync development build ($RELEASE_TAG)" \
+              --notes "Automated AniSync development build for Shoko.Abstractions $SHOKO_ABSTRACTIONS_VERSION. Built and tested from commit $GITHUB_SHA."
+          fi

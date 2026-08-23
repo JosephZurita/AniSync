@@ -1,0 +1,2 @@
+# Generated bundles can contain significant whitespace inside template literals.
+AniSync/wwwroot/app/assets/** -whitespace
