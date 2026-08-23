@@ -1,0 +1,39 @@
+{
+  "type": "package",
+  "id": "73455c6e-c830-57fc-9650-41c953ff7be9",
+  "name": "AniSync",
+  "overview": "Synchronizes Shoko watch state and episode progress to AniList and MyAnimeList.",
+  "authors": "JosephZurita",
+  "repository_url": "https://github.com/JosephZurita/AniSync",
+  "homepage_url": "https://github.com/JosephZurita/AniSync",
+  "image_url": "https://raw.githubusercontent.com/JosephZurita/AniSync/master/docs/banner-light.png",
+  "tags": [
+    "shoko",
+    "anime",
+    "watch-state",
+    "sync",
+    "anilist",
+    "myanimelist",
+    "mal",
+    "scrobbling",
+    "plugin"
+  ],
+  "releases": [
+    {
+      "version": "1.0.0-dev.4",
+      "tag": "dev-4-4a364e5",
+      "source_revision": "4a364e5cef3d5b5e0ef422aebc1833fff19afaed",
+      "released_at": "2026-08-23T12:56:15+00:00",
+      "channel": "Dev",
+      "release_notes": "Automated AniSync development build 1.0.0-dev.4 from commit 4a364e5cef3d5b5e0ef422aebc1833fff19afaed using Shoko.Abstractions 6.0.0-alpha.81.",
+      "archives": [
+        {
+          "runtime": "any",
+          "abstraction": "6.0.0",
+          "url": "https://github.com/JosephZurita/AniSync/releases/download/dev-4-4a364e5/AniSync-1.0.0-dev.4.zip",
+          "checksum": "47724cf824b36ed1b493c05985fb2160ec22786151e8fc5d47da3f34658f58ef"
+        }
+      ]
+    }
+  ]
+}
