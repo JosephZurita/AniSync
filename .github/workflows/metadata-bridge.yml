@@ -1,0 +1,69 @@
+name: Metadata bridge
+on:
+  push:
+    branches: [master]
+    paths: ['tools/ShokoRelayMetadataBridge/**', 'tools/ShokoRelayMetadataBridge.Tests/**', '.github/workflows/metadata-bridge.yml']
+    tags: ['metadata-bridge-v*']
+  pull_request:
+    paths: ['tools/ShokoRelayMetadataBridge/**', 'tools/ShokoRelayMetadataBridge.Tests/**', '.github/workflows/metadata-bridge.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: metadata-bridge-${{ github.event_name == 'pull_request' && github.ref || 'publication' }}
+  cancel-in-progress: false
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Preserve prior releases
+        shell: bash
+        run: |
+          mkdir artifact
+          if git show origin/bridge-manifest:manifest.json > artifact/existing-manifest.json; then
+            jq -e . artifact/existing-manifest.json >/dev/null
+          else
+            rm artifact/existing-manifest.json
+          fi
+      - name: Test and package
+        run: bash tools/ShokoRelayMetadataBridge/package.sh artifact
+      - uses: actions/upload-artifact@v7
+        with:
+          name: metadata-bridge
+          path: |
+            artifact/*.zip
+            artifact/*.sha256
+            artifact/manifest.json
+      - name: Publish immutable release and native feed
+        if: startsWith(github.ref, 'refs/tags/metadata-bridge-v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version=$(sed -n 's/.*<Version>\([^<]*\)<\/Version>.*/\1/p' tools/ShokoRelayMetadataBridge/ShokoRelayMetadataBridge.csproj)
+          test "$GITHUB_REF_NAME" = "metadata-bridge-v$version"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo 'Refusing to overwrite an existing release.' >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" artifact/*.zip artifact/*.sha256 --verify-tag --title "Metadata Bridge $version" --notes "Stable bridge, built and tested from $GITHUB_SHA against Shoko.Abstractions alpha.111."
+          if git show-ref --verify refs/remotes/origin/bridge-manifest >/dev/null 2>&1; then
+            git worktree add manifest-worktree origin/bridge-manifest
+          else
+            git worktree add --detach manifest-worktree
+            git -C manifest-worktree switch --orphan bridge-manifest
+          fi
+          cp artifact/manifest.json manifest-worktree/manifest.json
+          git -C manifest-worktree config user.name github-actions[bot]
+          git -C manifest-worktree config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C manifest-worktree add manifest.json
+          git -C manifest-worktree commit -m "chore: publish metadata bridge $version"
+          git -C manifest-worktree push origin HEAD:bridge-manifest

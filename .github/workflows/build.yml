@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - master
+    paths-ignore:
+      - 'tools/ShokoRelayMetadataBridge/**'
+      - 'tools/ShokoRelayMetadataBridge.Tests/**'
+      - '.github/workflows/metadata-bridge.yml'
   pull_request:
     branches:
       - master

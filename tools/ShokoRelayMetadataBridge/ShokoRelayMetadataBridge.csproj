@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>0.1.1</Version>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ShokoRelayMetadataBridge.Tests" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Shoko.Abstractions" Version="6.0.0-alpha.111" ExcludeAssets="runtime" />
+    <AssemblyMetadata Include="PackageID" Value="83afc08d-34e3-4af5-8851-4528ec19cb39" />
+    <AssemblyMetadata Include="PackageName" Value="Shoko Relay Metadata Bridge" />
+    <AssemblyMetadata Include="PackageOverview" Value="Refreshes Plex through Relay when Shoko receives updated metadata." />
+    <AssemblyMetadata Include="ReleaseChannel" Value="Stable" />
+  </ItemGroup>
+</Project>
