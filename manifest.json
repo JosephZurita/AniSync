@@ -20,6 +20,22 @@
   ],
   "releases": [
     {
+      "version": "1.0.0-dev.5",
+      "tag": "dev-5-d7daac9",
+      "source_revision": "d7daac9520abfeac60bdf4c3626d071c354ca112",
+      "released_at": "2026-10-23T20:26:41+00:00",
+      "channel": "Dev",
+      "release_notes": "Automated AniSync development build 1.0.0-dev.5 from commit d7daac9520abfeac60bdf4c3626d071c354ca112 using Shoko.Abstractions 6.0.0-alpha.81.",
+      "archives": [
+        {
+          "runtime": "any",
+          "abstraction": "6.0.0",
+          "url": "https://github.com/JosephZurita/AniSync/releases/download/dev-5-d7daac9/AniSync-1.0.0-dev.5.zip",
+          "checksum": "5078546cc82b3ff3de30b01a0fb82c5b6b2851e4a5ad77c9ee5966a86eb31105"
+        }
+      ]
+    },
+    {
       "version": "1.0.0-dev.4",
       "tag": "dev-4-4a364e5",
       "source_revision": "4a364e5cef3d5b5e0ef422aebc1833fff19afaed",
