@@ -1,0 +1,30 @@
+{
+  "type": "package",
+  "id": "83afc08d-34e3-4af5-8851-4528ec19cb39",
+  "name": "Shoko Relay Metadata Bridge",
+  "overview": "Refreshes Plex through Relay when Shoko receives updated metadata.",
+  "authors": "JosephZurita",
+  "repository_url": "https://github.com/JosephZurita/AniSync",
+  "tags": [
+    "plex",
+    "metadata"
+  ],
+  "releases": [
+    {
+      "version": "0.1.1",
+      "tag": "metadata-bridge-v0.1.1",
+      "source_revision": "d7daac9520abfeac60bdf4c3626d071c354ca112",
+      "released_at": "2026-10-23T20:27:13Z",
+      "channel": "Stable",
+      "release_notes": "Tested metadata-event bridge for the coordinated Shoko/Relay stack.",
+      "archives": [
+        {
+          "runtime": "any",
+          "abstraction": "6.0.0",
+          "url": "https://github.com/JosephZurita/AniSync/releases/download/metadata-bridge-v0.1.1/ShokoRelayMetadataBridge-0.1.1.zip",
+          "checksum": "ff3e82b49a4f1f7db667a7411c5ebf72d4c837317c2ef613fe88d928c87d4a22"
+        }
+      ]
+    }
+  ]
+}
